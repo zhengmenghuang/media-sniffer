@@ -1,0 +1,351 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <title>Media Sniffer - Preview</title>
+  <style>
+    :root {
+      --bg: #1a1d23;
+      --bg2: #22262f;
+      --bg3: #2c3040;
+      --border: #363c4e;
+      --text: #e2e4ea;
+      --text2: #8b90a4;
+      --accent: #5b6ef5;
+      --accent-hover: #7080ff;
+      --green: #3ecf6e;
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      width: 480px;
+      min-height: 300px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+    }
+    /* Header */
+    .header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 12px 14px 10px; border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .header-left { display: flex; align-items: center; gap: 8px; font-weight: 600; font-size: 14px; }
+    .logo { font-size: 20px; }
+    .badge { background: var(--accent); color: #fff; border-radius: 10px; padding: 1px 7px; font-size: 11px; font-weight: 700; }
+    .btn-icon { background: none; border: 1px solid var(--border); color: var(--text2); border-radius: 6px; padding: 4px 8px; cursor: pointer; font-size: 12px; }
+    /* Filter */
+    .filter-bar { display: flex; gap: 6px; padding: 8px 14px; border-bottom: 1px solid var(--border); background: var(--bg2); }
+    .tab { display: flex; align-items: center; gap: 4px; padding: 4px 10px; border-radius: 20px; border: 1px solid var(--border); cursor: pointer; font-size: 12px; color: var(--text2); background: none; }
+    .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .tab .cnt { background: var(--bg3); color: var(--text2); border-radius: 8px; padding: 0 5px; font-size: 10px; line-height: 16px; }
+    .tab.active .cnt { background: rgba(255,255,255,.2); color: #fff; }
+    /* Search */
+    .search-bar { padding: 8px 14px 6px; border-bottom: 1px solid var(--border); }
+    .search-bar input { width: 100%; background: var(--bg3); border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; color: var(--text); font-size: 12px; outline: none; }
+    .search-bar input::placeholder { color: var(--text2); }
+    /* List */
+    .list { flex: 1; overflow-y: auto; padding: 6px 0; }
+    .item { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid var(--border); transition: background .1s; }
+    .item:last-child { border-bottom: none; }
+    .item:hover { background: var(--bg3); }
+    .type-icon { width: 30px; height: 30px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 16px; flex-shrink: 0; }
+    .type-icon.video { background: rgba(91,110,245,.18); }
+    .type-icon.audio { background: rgba(245,165,66,.18); }
+    .type-icon.image { background: rgba(62,207,110,.18); }
+    .type-icon.m3u8 { background: rgba(245,101,101,.18); }
+    .item-info { flex: 1; min-width: 0; }
+    .item-name {
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .item-name-link {
+      cursor: pointer;
+      color: var(--text);
+    }
+    .item-name-link:hover {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .item-meta { display: flex; gap: 8px; margin-top: 2px; color: var(--text2); font-size: 11px; align-items: center; }
+    .type-tag { border-radius: 3px; padding: 1px 5px; font-size: 10px; font-weight: 600; text-transform: uppercase; }
+    .type-tag.video { background: rgba(91,110,245,.2); color: #7080ff; }
+    .type-tag.audio { background: rgba(245,165,66,.2); color: #f5a142; }
+    .type-tag.image { background: rgba(62,207,110,.2); color: #3ecf6e; }
+    .type-tag.m3u8 { background: rgba(245,101,101,.2); color: #f56565; }
+    .item-actions { display: flex; gap: 6px; flex-shrink: 0; }
+    .btn-action { padding: 4px 8px; border-radius: 6px; font-size: 11px; cursor: pointer; border: none; transition: all .15s; font-weight: 500; }
+    .btn-dl { background: var(--accent); color: #fff; }
+    .btn-dl:hover { background: var(--accent-hover); }
+    .btn-copy { background: var(--bg3); color: var(--text2); border: 1px solid var(--border); }
+    .btn-copy:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ===== Image Thumbnail ===== */
+    .img-thumb-wrap {
+      position: relative;
+      flex-shrink: 0;
+    }
+    .img-thumb {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      cursor: zoom-in;
+      display: block;
+      transition: border-color .15s, transform .15s;
+    }
+    .img-thumb:hover {
+      border-color: var(--accent);
+      transform: scale(1.05);
+    }
+    .img-thumb-wrap:hover .img-preview-popup {
+      opacity: 1;
+      transform: translateY(-50%);
+    }
+    .img-preview-popup {
+      position: absolute;
+      right: 44px;
+      top: 50%;
+      transform: translateY(calc(-50% + 6px));
+      width: 160px;
+      height: 120px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      box-shadow: 0 8px 24px rgba(0,0,0,.6);
+      z-index: 100;
+      opacity: 0;
+      transition: opacity .2s, transform .2s;
+      pointer-events: none;
+    }
+    .img-preview-popup img {
+      width: 100%;
+      height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    .img-thumb-loading {
+      width: 36px; height: 36px; border-radius: 6px;
+      background: var(--bg3); border: 1px dashed var(--border);
+      display: flex; align-items: center; justify-content: center;
+      font-size: 14px; color: var(--text2);
+    }
+    .img-thumb-loading[hidden] { display: none; }
+
+    /* Footer */
+    .footer { display: flex; align-items: center; justify-content: space-between; padding: 8px 14px; border-top: 1px solid var(--border); background: var(--bg2); color: var(--text2); font-size: 11px; }
+
+    /* Toast */
+    #toast { position: fixed; bottom: 50px; left: 50%; transform: translateX(-50%) translateY(20px); background: var(--bg3); border: 1px solid var(--border); color: var(--text); padding: 7px 16px; border-radius: 20px; font-size: 12px; opacity: 0; pointer-events: none; transition: all .2s; white-space: nowrap; }
+    #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <span class="logo">🎯</span>
+    Media Sniffer
+    <span class="badge">6</span>
+  </div>
+  <div style="display:flex;gap:6px;">
+    <button class="btn-icon">🔄 刷新</button>
+    <button class="btn-icon">🗑 清除</button>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <button class="tab active" data-type="all">全部 <span class="cnt">6</span></button>
+  <button class="tab" data-type="video">🎬 视频 <span class="cnt">1</span></button>
+  <button class="tab" data-type="audio">🎵 音频 <span class="cnt">1</span></button>
+  <button class="tab" data-type="image">🖼 图片 <span class="cnt">3</span></button>
+  <button class="tab" data-type="m3u8">📡 M3U8 <span class="cnt">1</span></button>
+</div>
+
+<div class="search-bar">
+  <input type="text" placeholder="🔍 搜索资源 URL 或文件名..." />
+</div>
+
+<div class="list" id="list">
+  <!-- 视频 -->
+  <div class="item">
+    <div class="type-icon video">🎬</div>
+    <div class="item-info">
+      <div class="item-name item-name-link" data-url="https://example.com/video.mp4" title="https://example.com/video.mp4">video.mp4</div>
+      <div class="item-meta">
+        <span class="type-tag video">VIDEO</span>
+        <span>12.4 MB</span>
+        <span>video/mp4</span>
+      </div>
+    </div>
+    <div class="item-actions">
+      <button class="btn-action btn-dl">⬇ 下载</button>
+      <button class="btn-action btn-copy">复制链接</button>
+    </div>
+  </div>
+
+  <!-- 音频 -->
+  <div class="item">
+    <div class="type-icon audio">🎵</div>
+    <div class="item-info">
+      <div class="item-name item-name-link" data-url="https://example.com/music.mp3" title="https://example.com/music.mp3">music.mp3</div>
+      <div class="item-meta">
+        <span class="type-tag audio">AUDIO</span>
+        <span>3.2 MB</span>
+        <span>audio/mpeg</span>
+      </div>
+    </div>
+    <div class="item-actions">
+      <button class="btn-action btn-dl">⬇ 下载</button>
+      <button class="btn-action btn-copy">复制链接</button>
+    </div>
+  </div>
+
+  <!-- 图片 1：有效图片（Unsplash 示例） -->
+  <div class="item">
+    <div class="type-icon image">🖼</div>
+    <div class="item-info">
+      <div class="item-name item-name-link" data-url="https://picsum.photos/seed/abc/800/600" title="wingwell-white.png">wingwell-white.png</div>
+      <div class="item-meta">
+        <span class="type-tag image">IMAGE</span>
+        <span>84 KB</span>
+        <span>image/png</span>
+      </div>
+    </div>
+    <!-- 缩略图 -->
+    <div class="img-thumb-wrap">
+      <img class="img-thumb"
+        src="https://picsum.photos/seed/abc/80/80"
+        alt="" loading="lazy" />
+      <div class="img-thumb-loading" hidden>🖼</div>
+      <div class="img-preview-popup">
+        <img src="https://picsum.photos/seed/abc/320/240" alt="" loading="lazy" />
+      </div>
+    </div>
+    <div class="item-actions">
+      <button class="btn-action btn-dl">⬇ 下载</button>
+      <button class="btn-action btn-copy">复制链接</button>
+    </div>
+  </div>
+
+  <!-- 图片 2 -->
+  <div class="item">
+    <div class="type-icon image">🖼</div>
+    <div class="item-info">
+      <div class="item-name item-name-link" data-url="https://picsum.photos/seed/xyz/800/600" title="wingwell-black.png">wingwell-black.png</div>
+      <div class="item-meta">
+        <span class="type-tag image">IMAGE</span>
+        <span>62 KB</span>
+        <span>image/png</span>
+      </div>
+    </div>
+    <div class="img-thumb-wrap">
+      <img class="img-thumb"
+        src="https://picsum.photos/seed/xyz/80/80"
+        alt="" loading="lazy" />
+      <div class="img-thumb-loading" hidden>🖼</div>
+      <div class="img-preview-popup">
+        <img src="https://picsum.photos/seed/xyz/320/240" alt="" loading="lazy" />
+      </div>
+    </div>
+    <div class="item-actions">
+      <button class="btn-action btn-dl">⬇ 下载</button>
+      <button class="btn-action btn-copy">复制链接</button>
+    </div>
+  </div>
+
+  <!-- 图片 3：加载失败占位 -->
+  <div class="item">
+    <div class="type-icon image">🖼</div>
+    <div class="item-info">
+      <div class="item-name item-name-link" data-url="https://picsum.photos/seed/test3/800/600" title="gb7iolsiapna">gb7iolsiapna</div>
+      <div class="item-meta">
+        <span class="type-tag image">IMAGE</span>
+        <span>image/jpeg</span>
+      </div>
+    </div>
+    <div class="img-thumb-wrap">
+      <img class="img-thumb"
+        src="https://picsum.photos/seed/test3/80/80"
+        alt="" loading="lazy" />
+      <div class="img-thumb-loading" hidden>🖼</div>
+      <div class="img-preview-popup">
+        <img src="https://picsum.photos/seed/test3/320/240" alt="" loading="lazy" />
+      </div>
+    </div>
+    <div class="item-actions">
+      <button class="btn-action btn-dl">⬇ 下载</button>
+      <button class="btn-action btn-copy">复制链接</button>
+    </div>
+  </div>
+
+  <!-- M3U8 -->
+  <div class="item">
+    <div class="type-icon m3u8">📡</div>
+    <div class="item-info">
+      <div class="item-name item-name-link" data-url="https://example.com/stream.m3u8" title="stream.m3u8">stream.m3u8</div>
+      <div class="item-meta">
+        <span class="type-tag m3u8">M3U8</span>
+        <span>application/vnd.apple.mpegurl</span>
+      </div>
+    </div>
+    <div class="item-actions">
+      <button class="btn-action btn-dl">📋 复制</button>
+      <button class="btn-action btn-copy">复制链接</button>
+    </div>
+  </div>
+</div>
+
+<div class="footer">
+  <span>找到 6 / 6 个资源</span>
+  <span>Media Sniffer v1.2.0</span>
+</div>
+
+<div id="toast"></div>
+
+<script>
+// 点击文件名新窗口打开
+document.getElementById('list').addEventListener('click', (e) => {
+  const nameEl = e.target.closest('.item-name-link');
+  if (nameEl && nameEl.dataset.url) {
+    window.open(nameEl.dataset.url, '_blank');
+  }
+});
+
+document.querySelectorAll('.img-thumb').forEach(img => {
+  img.addEventListener('error', () => {
+    const fallback = img.nextElementSibling;
+    img.hidden = true;
+    if (fallback?.classList.contains('img-thumb-loading')) {
+      fallback.hidden = false;
+    }
+  });
+});
+
+// 简单的 copy 交互演示
+document.querySelectorAll('.btn-copy').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const orig = btn.textContent;
+    btn.textContent = '✓ 已复制';
+    btn.style.color = '#3ecf6e';
+    btn.style.borderColor = '#3ecf6e';
+    setTimeout(() => {
+      btn.textContent = orig;
+      btn.style.color = '';
+      btn.style.borderColor = '';
+    }, 1500);
+  });
+});
+</script>
+</body>
+</html>

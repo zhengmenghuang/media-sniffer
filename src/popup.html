@@ -1,0 +1,419 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Media Sniffer</title>
+  <style>
+    :root {
+      --bg: #1a1d23;
+      --bg2: #22262f;
+      --bg3: #2c3040;
+      --border: #363c4e;
+      --text: #e2e4ea;
+      --text2: #8b90a4;
+      --accent: #5b6ef5;
+      --accent-hover: #7080ff;
+      --green: #3ecf6e;
+      --yellow: #f5c542;
+      --red: #f56565;
+      --orange: #f5a142;
+      --radius: 8px;
+      --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      width: 480px;
+      min-height: 300px;
+      max-height: 600px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+    }
+
+    /* ---- Header ---- */
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px 14px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--text);
+    }
+    .header-left .logo {
+      font-size: 20px;
+    }
+    .badge {
+      background: var(--accent);
+      color: #fff;
+      border-radius: 10px;
+      padding: 1px 7px;
+      font-size: 11px;
+      font-weight: 700;
+    }
+    .btn-icon {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text2);
+      border-radius: 6px;
+      padding: 4px 8px;
+      cursor: pointer;
+      font-size: 12px;
+      transition: all .15s;
+    }
+    .btn-icon:hover { border-color: var(--accent); color: var(--accent); }
+
+    /* ---- Filter Tabs ---- */
+    .filter-bar {
+      display: flex;
+      gap: 6px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+    }
+    .tab {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      padding: 4px 10px;
+      border-radius: 20px;
+      border: 1px solid var(--border);
+      cursor: pointer;
+      font-size: 12px;
+      color: var(--text2);
+      transition: all .15s;
+      background: none;
+      white-space: nowrap;
+      min-width: fit-content;
+    }
+    .tab:hover { border-color: var(--accent); color: var(--text); }
+    .tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .tab .cnt {
+      background: rgba(255,255,255,.2);
+      border-radius: 8px;
+      padding: 0 5px;
+      font-size: 10px;
+      line-height: 16px;
+      min-width: 18px;
+      text-align: center;
+    }
+    .tab:not(.active) .cnt { background: var(--bg3); color: var(--text2); }
+
+    /* ---- Search ---- */
+    .search-bar {
+      padding: 8px 14px 6px;
+      border-bottom: 1px solid var(--border);
+    }
+    .search-bar input {
+      width: 100%;
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 6px 10px;
+      color: var(--text);
+      font-size: 12px;
+      outline: none;
+      transition: border .15s;
+    }
+    .search-bar input:focus { border-color: var(--accent); }
+    .search-bar input::placeholder { color: var(--text2); }
+
+    /* ---- List ---- */
+    .list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 6px 0;
+    }
+    .list::-webkit-scrollbar { width: 5px; }
+    .list::-webkit-scrollbar-track { background: transparent; }
+    .list::-webkit-scrollbar-thumb { background: var(--border); border-radius: 3px; }
+
+    .item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 8px 14px;
+      border-bottom: 1px solid var(--border);
+      transition: background .1s;
+      min-width: 0;
+      overflow: visible;
+    }
+    .item:last-child { border-bottom: none; }
+    .item:hover { background: var(--bg3); }
+
+    .type-icon {
+      width: 30px;
+      height: 30px;
+      border-radius: 8px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 16px;
+      flex-shrink: 0;
+    }
+    .type-icon.video { background: rgba(91,110,245,.18); }
+    .type-icon.audio { background: rgba(245,165,66,.18); }
+    .type-icon.image { background: rgba(62,207,110,.18); }
+    .type-icon.m3u8 { background: rgba(245,101,101,.18); }
+
+    .item-info {
+      flex: 1;
+      min-width: 0;
+    }
+    .item-name {
+      font-weight: 500;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      color: var(--text);
+    }
+    .item-name-link {
+      cursor: pointer;
+    }
+    .item-name-link:hover {
+      color: var(--accent);
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .item-meta {
+      display: flex;
+      gap: 6px;
+      margin-top: 2px;
+      color: var(--text2);
+      font-size: 11px;
+      align-items: center;
+      min-width: 0;
+      flex-wrap: wrap;
+    }
+    .item-meta > span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      max-width: 100%;
+    }
+    .type-tag {
+      border-radius: 3px;
+      padding: 1px 5px;
+      font-size: 10px;
+      font-weight: 600;
+      text-transform: uppercase;
+    }
+    .type-tag.video { background: rgba(91,110,245,.2); color: #7080ff; }
+    .type-tag.audio { background: rgba(245,165,66,.2); color: #f5a142; }
+    .type-tag.image { background: rgba(62,207,110,.2); color: #3ecf6e; }
+    .type-tag.m3u8 { background: rgba(245,101,101,.2); color: #f56565; }
+
+    .item-actions {
+      display: flex;
+      gap: 6px;
+      flex-shrink: 0;
+    }
+    .btn-action {
+      padding: 4px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      cursor: pointer;
+      border: none;
+      transition: all .15s;
+      font-weight: 500;
+    }
+    .btn-dl {
+      background: var(--accent);
+      color: #fff;
+    }
+    .btn-dl:hover { background: var(--accent-hover); }
+    .btn-copy {
+      background: var(--bg3);
+      color: var(--text2);
+      border: 1px solid var(--border);
+    }
+    .btn-copy:hover { border-color: var(--accent); color: var(--accent); }
+    .btn-copy.copied { color: var(--green); border-color: var(--green); }
+
+    /* ---- Empty ---- */
+    .empty {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 40px 20px;
+      color: var(--text2);
+      text-align: center;
+      gap: 10px;
+    }
+    .empty .big-icon { font-size: 40px; opacity: .4; }
+    .empty p { font-size: 13px; line-height: 1.6; }
+
+    /* ---- Loading ---- */
+    .loading {
+      flex: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: var(--text2);
+      gap: 8px;
+    }
+    .spinner {
+      width: 16px; height: 16px;
+      border: 2px solid var(--border);
+      border-top-color: var(--accent);
+      border-radius: 50%;
+      animation: spin .7s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ---- Footer ---- */
+    .footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 14px;
+      border-top: 1px solid var(--border);
+      background: var(--bg2);
+      color: var(--text2);
+      font-size: 11px;
+    }
+    .footer a {
+      color: var(--text2);
+      text-decoration: none;
+    }
+    .footer a:hover { color: var(--accent); }
+
+    /* ---- Image Thumbnail ---- */
+    .img-thumb-wrap {
+      position: relative;
+      flex-shrink: 0;
+      cursor: zoom-in;
+    }
+    .img-thumb {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      object-fit: cover;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      display: block;
+      transition: border-color .15s, transform .15s;
+    }
+    .img-thumb-wrap:hover .img-thumb {
+      border-color: var(--accent);
+      transform: scale(1.08);
+    }
+    /* 悬浮大图预览 - 由 JS 动态设置 position:fixed 坐标 */
+    .img-preview-popup {
+      position: fixed;
+      width: 240px;
+      height: 180px;
+      border-radius: 8px;
+      overflow: hidden;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      box-shadow: 0 8px 24px rgba(0,0,0,.55);
+      z-index: 99999;
+      opacity: 0;
+      transition: opacity .2s;
+      pointer-events: none;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+    .img-preview-popup img {
+      max-width: 100%;
+      max-height: 100%;
+      object-fit: contain;
+      display: block;
+    }
+    /* 加载中占位 */
+    .img-thumb-loading {
+      width: 36px;
+      height: 36px;
+      border-radius: 6px;
+      background: var(--bg3);
+      border: 1px dashed var(--border);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 14px;
+      color: var(--text2);
+    }
+    .img-thumb-loading[hidden] { display: none; }
+
+    /* Toast */
+    #toast {
+      position: fixed;
+      bottom: 50px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--bg3);
+      border: 1px solid var(--border);
+      color: var(--text);
+      padding: 7px 16px;
+      border-radius: 20px;
+      font-size: 12px;
+      opacity: 0;
+      pointer-events: none;
+      transition: all .2s;
+      white-space: nowrap;
+    }
+    #toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+  </style>
+</head>
+<body>
+
+<div class="header">
+  <div class="header-left">
+    <span class="logo">🎯</span>
+    Media Sniffer
+    <span class="badge" id="total-badge">0</span>
+  </div>
+  <div style="display:flex;gap:6px;">
+    <button class="btn-icon" id="btn-refresh" title="重新扫描">🔄 刷新</button>
+    <button class="btn-icon" id="btn-clear" title="清除列表">🗑 清除</button>
+  </div>
+</div>
+
+<div class="filter-bar">
+  <button class="tab active" data-type="all">全部 <span class="cnt" id="cnt-all">0</span></button>
+  <button class="tab" data-type="video">🎬 视频 <span class="cnt" id="cnt-video">0</span></button>
+  <button class="tab" data-type="audio">🎵 音频 <span class="cnt" id="cnt-audio">0</span></button>
+  <button class="tab" data-type="image">🖼 图片 <span class="cnt" id="cnt-image">0</span></button>
+  <button class="tab" data-type="m3u8">📡 M3U8 <span class="cnt" id="cnt-m3u8">0</span></button>
+</div>
+
+<div class="search-bar">
+  <input type="text" id="search-input" placeholder="🔍 搜索资源 URL 或文件名..." />
+</div>
+
+<div id="list-container" class="loading">
+  <div class="spinner"></div>
+  <span>正在加载...</span>
+</div>
+
+<div class="footer">
+  <span id="status-text">等待嗅探...</span>
+  <span>Media Sniffer v1.2.0</span>
+</div>
+
+<div id="toast"></div>
+
+<script src="popup.js"></script>
+</body>
+</html>
