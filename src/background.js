@@ -347,9 +347,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   // ======= 注入下载 & Blob 下载（转发到 content script）=======
   if (message.action === 'INJECT_DOWNLOAD' || message.action === 'FETCH_BLOB_DOWNLOAD') {
     const { url, filename, tabId } = message;
-    // 转发到 content script 在页面上下文执行下载
-    chrome.tabs.sendMessage(tabId, { action: message.action, url, filename })
-      .then(result => sendResponse(result || { ok: false, error: 'content script 无响应' }))
+    // 优先转发给 content script；如果页面尚未注入 content script，则临时 executeScript 兜底。
+    handleInjectedDownload(message.action, tabId, url, filename)
+      .then(result => sendResponse(result || { ok: false, error: '下载脚本无响应' }))
       .catch(err => sendResponse({ ok: false, error: err.message }));
     return true;
   }
@@ -374,6 +374,137 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   return false;
 });
+
+async function handleInjectedDownload(action, tabId, url, filename) {
+  try {
+    return await chrome.tabs.sendMessage(tabId, { action, url, filename });
+  } catch (err) {
+    if (!isMissingContentScriptError(err)) throw err;
+    return executeInjectedDownload(tabId, action, url, filename);
+  }
+}
+
+function isMissingContentScriptError(error) {
+  const message = String(error?.message || error || '');
+  return message.includes('Receiving end does not exist')
+    || message.includes('Could not establish connection');
+}
+
+async function executeInjectedDownload(tabId, action, url, filename) {
+  if (!chrome.scripting?.executeScript) {
+    throw new Error('当前浏览器不支持临时脚本注入');
+  }
+  const results = await chrome.scripting.executeScript({
+    target: { tabId },
+    func: injectedDownloadFallback,
+    args: [action, url, filename],
+  });
+  return results?.[0]?.result || { ok: false, error: '临时脚本未返回结果' };
+}
+
+async function injectedDownloadFallback(action, url, filename) {
+  function getRoot() {
+    return document.body || document.documentElement;
+  }
+
+  function waitForRoot(timeoutMs = 5000) {
+    const root = getRoot();
+    if (root) return Promise.resolve(root);
+
+    return new Promise((resolve, reject) => {
+      let done = false;
+      let mutationObserver = null;
+      let rafId = 0;
+      const cleanup = () => {
+        done = true;
+        clearTimeout(timer);
+        if (rafId) cancelAnimationFrame(rafId);
+        mutationObserver?.disconnect();
+      };
+      const checkRoot = () => {
+        if (done) return true;
+        const nextRoot = getRoot();
+        if (!nextRoot) return false;
+        cleanup();
+        resolve(nextRoot);
+        return true;
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('页面 DOM 尚未就绪，无法注入下载'));
+      }, timeoutMs);
+      mutationObserver = new MutationObserver(checkRoot);
+      if (document.documentElement) {
+        mutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+      }
+      const tick = () => {
+        if (!checkRoot()) rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+    });
+  }
+
+  function isSameOriginDownloadUrl(downloadUrl) {
+    try {
+      const parsed = new URL(downloadUrl, location.href);
+      return parsed.protocol === 'blob:' || parsed.protocol === 'data:' || parsed.origin === location.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  async function triggerAnchor(downloadUrl, downloadFilename) {
+    const root = await waitForRoot();
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = downloadFilename || '';
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    root.appendChild(a);
+    a.click();
+    await new Promise(resolve => setTimeout(resolve, 300));
+    a.remove();
+    const verified = isSameOriginDownloadUrl(downloadUrl);
+    return {
+      ok: true,
+      triggered: true,
+      verified,
+      warning: verified ? '' : '跨域链接无法确认浏览器是否接受 download 属性'
+    };
+  }
+
+  async function fetchBlob(downloadUrl, downloadFilename) {
+    let blobUrl = '';
+    let a = null;
+    try {
+      const root = await waitForRoot();
+      const resp = await fetch(downloadUrl, { mode: 'cors', credentials: 'include' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      blobUrl = URL.createObjectURL(blob);
+      a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = downloadFilename || 'media';
+      a.style.display = 'none';
+      root.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        a?.remove();
+        URL.revokeObjectURL(blobUrl);
+      }, 1000);
+      return { ok: true, triggered: true, verified: true };
+    } catch (e) {
+      a?.remove();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      return { ok: false, error: e.message };
+    }
+  }
+
+  if (action === 'FETCH_BLOB_DOWNLOAD') {
+    return fetchBlob(url, filename);
+  }
+  return triggerAnchor(url, filename);
+}
 
 // ======= YouTube 下载状态管理 =======
 let ytDownloadStatus = { phase: 'idle' }; // idle | pending | converting | done | error
