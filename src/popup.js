@@ -379,6 +379,18 @@ function loadResources(rescan = false) {
   chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
     if (!tabs || !tabs[0]) return;
     currentTabId = tabs[0].id;
+    const tabUrl = tabs[0].url || '';
+
+    // YouTube 检测：显示下载面板
+    if (isYouTubeUrl(tabUrl) && getYouTubeVideoId(tabUrl)) {
+      showYtPanel(tabUrl);
+      chrome.runtime.sendMessage({ action: 'YT_DOWNLOAD_STATUS' })
+        .then(updateYtProgress)
+        .catch(() => resetYtProgress());
+    } else {
+      hideYtPanel();
+      resetYtProgress();
+    }
 
     const fetchResources = () => chrome.runtime.sendMessage({ action: 'GET_RESOURCES', tabId: currentTabId })
       .then(resources => {
@@ -425,6 +437,142 @@ chrome.runtime.onMessage.addListener((message) => {
       renderList();
     }
   }
+});
+
+// ======= YouTube 下载面板 =======
+let ytCurrentTabUrl = '';
+let ytSelectedFormat = '1080p';
+let ytPollTimer = null;
+
+const ytPanel = document.getElementById('yt-panel');
+const ytFormats = document.getElementById('yt-formats');
+const ytDlBtn = document.getElementById('yt-dl-btn');
+const ytProgress = document.getElementById('yt-progress');
+const ytProgressFill = document.getElementById('yt-progress-fill');
+const ytProgressText = document.getElementById('yt-progress-text');
+
+function isYouTubeUrl(url) {
+  try {
+    const host = new URL(url).hostname;
+    return host === 'youtube.com' || host.endsWith('.youtube.com') || host === 'youtu.be';
+  } catch { return false; }
+}
+
+function getYouTubeVideoId(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    if (host === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] || '';
+    if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+      if (u.searchParams.get('v')) return u.searchParams.get('v');
+      if (u.pathname.startsWith('/shorts/')) return u.pathname.split('/').filter(Boolean)[1] || '';
+      if (u.pathname.startsWith('/embed/')) return u.pathname.split('/').filter(Boolean)[1] || '';
+    }
+  } catch {}
+  return '';
+}
+
+function showYtPanel(url) {
+  ytCurrentTabUrl = url;
+  ytPanel.classList.add('visible');
+}
+
+function hideYtPanel() {
+  ytPanel.classList.remove('visible');
+  if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+}
+
+function resetYtProgress() {
+  delete ytDlBtn.dataset.downloadUrl;
+  ytProgress.classList.remove('visible');
+  ytProgressFill.style.width = '0%';
+  ytProgressText.textContent = '准备中...';
+  ytProgressText.className = 'yt-progress-text';
+  ytDlBtn.disabled = false;
+  ytDlBtn.textContent = '开始下载';
+}
+
+function updateYtProgress(status) {
+  if (!status || (status.videoId && status.videoId !== getYouTubeVideoId(ytCurrentTabUrl))) {
+    resetYtProgress();
+    return;
+  }
+  if (status.phase === 'idle') {
+    resetYtProgress();
+    return;
+  }
+  ytProgress.classList.add('visible');
+  if (status.phase === 'pending') {
+    ytProgressFill.style.width = '0%';
+    ytProgressText.textContent = '正在提交下载任务...';
+    ytProgressText.className = 'yt-progress-text';
+    ytDlBtn.disabled = true;
+    ytDlBtn.textContent = '处理中...';
+  } else if (status.phase === 'converting') {
+    ytProgressFill.style.width = `${status.progress}%`;
+    ytProgressText.textContent = `正在处理 ${status.progress}%`;
+    ytProgressText.className = 'yt-progress-text';
+    ytDlBtn.disabled = true;
+    ytDlBtn.textContent = '处理中...';
+  } else if (status.phase === 'done') {
+    ytProgressFill.style.width = '100%';
+    ytProgressText.textContent = '下载就绪！';
+    ytProgressText.className = 'yt-progress-text done';
+    ytDlBtn.disabled = false;
+    ytDlBtn.textContent = '⬇ 保存到本地';
+    ytDlBtn.dataset.downloadUrl = status.downloadUrl;
+    if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+  } else if (status.phase === 'error') {
+    ytProgressText.textContent = `失败：${status.error || '未知错误'}`;
+    ytProgressText.className = 'yt-progress-text error';
+    ytDlBtn.disabled = false;
+    ytDlBtn.textContent = '🔄 重试';
+    if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
+  }
+}
+
+// 格式选择按钮
+ytFormats.addEventListener('click', (e) => {
+  const btn = e.target.closest('.yt-fmt-btn');
+  if (!btn) return;
+  ytFormats.querySelectorAll('.yt-fmt-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  ytSelectedFormat = btn.dataset.fmt;
+  delete ytDlBtn.dataset.downloadUrl;
+  if (!ytDlBtn.disabled) ytDlBtn.textContent = '开始下载';
+});
+
+// 下载按钮
+ytDlBtn.addEventListener('click', () => {
+  // 如果已经有 downloadUrl，直接下载
+  if (ytDlBtn.dataset.downloadUrl) {
+    chrome.downloads.download({ url: ytDlBtn.dataset.downloadUrl, saveAs: true });
+    resetYtProgress();
+    return;
+  }
+  // 否则启动新下载
+  if (!ytCurrentTabUrl) return;
+  delete ytDlBtn.dataset.downloadUrl;
+  chrome.runtime.sendMessage({
+    action: 'YT_DOWNLOAD_START',
+    videoUrl: ytCurrentTabUrl,
+    format: ytSelectedFormat
+  }).then(status => {
+    updateYtProgress(status);
+    // 开始轮询状态
+    if (ytPollTimer) clearInterval(ytPollTimer);
+    ytPollTimer = setInterval(() => {
+      chrome.runtime.sendMessage({ action: 'YT_DOWNLOAD_STATUS' }).then(s => {
+        updateYtProgress(s);
+        if (s.phase === 'done' || s.phase === 'error' || s.phase === 'idle') {
+          clearInterval(ytPollTimer);
+          ytPollTimer = null;
+        }
+      }).catch(() => {});
+    }, 2000);
+  }).catch(err => {
+    updateYtProgress({ phase: 'error', error: err?.message });
+  });
 });
 
 // ======= 初始化 =======

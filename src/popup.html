@@ -374,6 +374,86 @@
       opacity: 1;
       transform: translateX(-50%) translateY(0);
     }
+
+    /* ---- YouTube Download Panel ---- */
+    .yt-panel {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg2);
+      display: none;
+    }
+    .yt-panel.visible { display: block; }
+    .yt-panel-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: var(--text);
+      margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .yt-panel-title .yt-logo { color: #ff0000; font-size: 14px; }
+    .yt-formats {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin-bottom: 8px;
+    }
+    .yt-fmt-btn {
+      padding: 5px 12px;
+      border-radius: 6px;
+      border: 1px solid var(--border);
+      background: var(--bg3);
+      color: var(--text2);
+      font-size: 11px;
+      cursor: pointer;
+      transition: all .15s;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .yt-fmt-btn:hover { border-color: var(--accent); color: var(--text); }
+    .yt-fmt-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+    .yt-dl-btn {
+      width: 100%;
+      padding: 7px;
+      border-radius: 6px;
+      border: none;
+      background: #ff0000;
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .yt-dl-btn:hover { background: #cc0000; }
+    .yt-dl-btn:disabled { background: var(--bg3); color: var(--text2); cursor: not-allowed; }
+    .yt-progress {
+      margin-top: 8px;
+      display: none;
+    }
+    .yt-progress.visible { display: block; }
+    .yt-progress-bar {
+      width: 100%;
+      height: 6px;
+      background: var(--bg3);
+      border-radius: 3px;
+      overflow: hidden;
+    }
+    .yt-progress-fill {
+      height: 100%;
+      background: #ff0000;
+      border-radius: 3px;
+      transition: width .3s;
+      width: 0%;
+    }
+    .yt-progress-text {
+      font-size: 11px;
+      color: var(--text2);
+      margin-top: 4px;
+      text-align: center;
+    }
+    .yt-progress-text.done { color: var(--green); }
+    .yt-progress-text.error { color: var(--red); }
   </style>
 </head>
 <body>
@@ -400,6 +480,36 @@
 
 <div class="search-bar">
   <input type="text" id="search-input" placeholder="🔍 搜索资源 URL 或文件名..." />
+</div>
+
+<div class="yt-panel" id="yt-panel">
+  <div class="yt-panel-title">
+    <span class="yt-logo">▶</span>
+    YouTube 下载
+  </div>
+  <div class="yt-formats" id="yt-formats">
+    <button class="yt-fmt-btn active" data-fmt="1080p">MP4 1080p</button>
+    <button class="yt-fmt-btn" data-fmt="720p">MP4 720p</button>
+    <button class="yt-fmt-btn" data-fmt="480p">MP4 480p</button>
+    <button class="yt-fmt-btn" data-fmt="360p">MP4 360p</button>
+    <button class="yt-fmt-btn" data-fmt="240p">MP4 240p</button>
+    <button class="yt-fmt-btn" data-fmt="144p">MP4 144p</button>
+    <button class="yt-fmt-btn" data-fmt="4k">WEBM 4K</button>
+    <button class="yt-fmt-btn" data-fmt="8k">WEBM 8K</button>
+    <button class="yt-fmt-btn" data-fmt="mp3">MP3 音频</button>
+    <button class="yt-fmt-btn" data-fmt="m4a">M4A 音频</button>
+    <button class="yt-fmt-btn" data-fmt="webm">WEBM 音频</button>
+    <button class="yt-fmt-btn" data-fmt="aac">AAC 音频</button>
+    <button class="yt-fmt-btn" data-fmt="opus">OPUS 音频</button>
+    <button class="yt-fmt-btn" data-fmt="ogg">OGG 音频</button>
+    <button class="yt-fmt-btn" data-fmt="wav">WAV 音频</button>
+    <button class="yt-fmt-btn" data-fmt="flac">FLAC 音频</button>
+  </div>
+  <button class="yt-dl-btn" id="yt-dl-btn">开始下载</button>
+  <div class="yt-progress" id="yt-progress">
+    <div class="yt-progress-bar"><div class="yt-progress-fill" id="yt-progress-fill"></div></div>
+    <div class="yt-progress-text" id="yt-progress-text">准备中...</div>
+  </div>
 </div>
 
 <div id="list-container" class="loading">

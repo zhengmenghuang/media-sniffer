@@ -114,16 +114,7 @@
         if (fmt?.url && fmt.url.startsWith('http')) {
           urls.push({ url: fmt.url, tagType: 'video', mimeType: fmt.mimeType || 'video/mp4' });
         }
-        // cipher 格式的 URL 需要解密，这里先跳过（需要签名解码）
-        if (fmt?.signatureCipher) {
-          try {
-            const params = new URLSearchParams(fmt.signatureCipher);
-            const u = params.get('url');
-            if (u && u.startsWith('http')) {
-              urls.push({ url: u, tagType: 'video', mimeType: fmt.mimeType || 'video/mp4' });
-            }
-          } catch {}
-        }
+        // cipher 格式需要签名解码，这里先跳过，避免生成不可用链接
       }
 
       return urls;

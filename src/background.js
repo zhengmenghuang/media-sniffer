@@ -344,8 +344,367 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // ======= YouTube 下载（通过第三方 API）=======
+  if (message.action === 'YT_DOWNLOAD_START') {
+    const { videoUrl, format } = message;
+    ytDownloadStart(videoUrl, format, sendResponse);
+    return true;
+  }
+
+  if (message.action === 'YT_DOWNLOAD_STATUS') {
+    sendResponse(ytDownloadStatus);
+    return false;
+  }
+
+  if (message.action === 'YT_DOWNLOAD_CANCEL') {
+    ytDownloadCancel();
+    sendResponse({ ok: true });
+    return false;
+  }
+
   return false;
 });
+
+// ======= YouTube 下载状态管理 =======
+let ytDownloadStatus = { phase: 'idle' }; // idle | pending | converting | done | error
+let ytTaskSeq = 0;
+let ytCurrentTask = null;
+
+const YT_API_CONFIG = {
+  key: 'dfcb6d76f2f6a9894gjkege8a4ab232222',
+  // format 映射：id → API format 参数
+  formats: {
+    '144p': '144',
+    '240p': '240',
+    '360p': '360',
+    '480p': '480',
+    '720p': '720',
+    '1080p': '1080',
+    '4k': '4k',
+    '8k': '8k',
+    'flac': 'flac',
+    'wav': 'wav',
+    'webm': 'webm',
+    'mp3': 'mp3',
+    'm4a': 'm4a',
+    'aac': 'aac',
+    'opus': 'opus',
+    'ogg': 'ogg',
+  },
+  formatLabels: {
+    '144p': 'MP4 144p',
+    '240p': 'MP4 240p',
+    '360p': 'MP4 360p',
+    '480p': 'MP4 480p',
+    '720p': 'MP4 720p',
+    '1080p': 'MP4 1080p',
+    '4k': 'WEBM 4K',
+    '8k': 'WEBM 8K',
+    'flac': 'FLAC 音频',
+    'wav': 'WAV 音频',
+    'webm': 'WEBM 音频',
+    'mp3': 'MP3 音频',
+    'm4a': 'M4A 音频',
+    'aac': 'AAC 音频',
+    'opus': 'OPUS 音频',
+    'ogg': 'OGG 音频',
+  },
+  formatExts: {
+    '144p': '.mp4',
+    '240p': '.mp4',
+    '360p': '.mp4',
+    '480p': '.mp4',
+    '720p': '.mp4',
+    '1080p': '.mp4',
+    '4k': '.webm',
+    '8k': '.webm',
+    'flac': '.flac',
+    'wav': '.wav',
+    'webm': '.webm',
+    'mp3': '.mp3',
+    'm4a': '.m4a',
+    'aac': '.aac',
+    'opus': '.opus',
+    'ogg': '.ogg',
+  },
+  // API 端点列表（故障转移）
+  endpoints: [
+    'https://p.savenow.to/ajax/download.php',
+    'https://p.lbserver.xyz/ajax/download.php',
+  ],
+  // Dubs.io 备用端点
+  dubsStart: 'https://dubs.io/wp-json/tools/v1/download-video',
+  dubsStatus: 'https://dubs.io/wp-json/tools/v1/status-video',
+};
+
+function ytDownloadCancel() {
+  ytClearTask(ytCurrentTask);
+  ytCurrentTask = null;
+  ytDownloadStatus = { phase: 'idle' };
+}
+
+function ytExtractVideoId(url) {
+  try {
+    const u = new URL(url);
+    const host = u.hostname;
+    if (host === 'youtu.be') return u.pathname.split('/').filter(Boolean)[0] || '';
+    if (host === 'youtube.com' || host.endsWith('.youtube.com')) {
+      const watchId = u.searchParams.get('v');
+      if (watchId) return watchId;
+      const parts = u.pathname.split('/').filter(Boolean);
+      if ((parts[0] === 'shorts' || parts[0] === 'embed') && parts[1]) return parts[1];
+    }
+  } catch { return ''; }
+  return '';
+}
+
+function ytCreateTask(videoUrl, formatId) {
+  const task = {
+    id: ++ytTaskSeq,
+    videoUrl,
+    videoId: ytExtractVideoId(videoUrl),
+    formatId,
+    controller: new AbortController(),
+    timers: new Set(),
+  };
+  ytCurrentTask = task;
+  return task;
+}
+
+function ytIsTaskActive(task) {
+  return !!task && ytCurrentTask?.id === task.id && !task.controller.signal.aborted;
+}
+
+function ytTrackTimer(task, timerId) {
+  task.timers.add(timerId);
+  return timerId;
+}
+
+function ytClearTask(task) {
+  if (!task) return;
+  task.controller.abort();
+  for (const timerId of task.timers) {
+    clearInterval(timerId);
+    clearTimeout(timerId);
+  }
+  task.timers.clear();
+}
+
+function ytSetStatus(task, status, broadcast = true) {
+  if (task && !ytIsTaskActive(task)) return false;
+  ytDownloadStatus = { ...status };
+  if (task) {
+    ytDownloadStatus.taskId = task.id;
+    ytDownloadStatus.videoUrl = task.videoUrl;
+    ytDownloadStatus.videoId = task.videoId;
+    ytDownloadStatus.format = task.formatId;
+  }
+  if (broadcast) {
+    chrome.runtime.sendMessage({ action: 'YT_DOWNLOAD_STATUS', ...ytDownloadStatus }).catch(() => {});
+  }
+  return true;
+}
+
+async function ytDownloadStart(videoUrl, formatId, sendResponse) {
+  ytDownloadCancel();
+  const task = ytCreateTask(videoUrl, formatId);
+  const formatCode = YT_API_CONFIG.formats[formatId];
+  if (!task.videoId) {
+    ytSetStatus(task, { phase: 'error', error: '无法提取视频 ID' }, false);
+    ytClearTask(task);
+    sendResponse(ytDownloadStatus);
+    return;
+  }
+  if (formatCode === undefined) {
+    ytSetStatus(task, { phase: 'error', error: '不支持的格式' }, false);
+    ytClearTask(task);
+    sendResponse(ytDownloadStatus);
+    return;
+  }
+
+  ytSetStatus(task, { phase: 'pending', progress: 0 }, false);
+  sendResponse(ytDownloadStatus);
+
+  let lastError = null;
+
+  // 依次尝试 savenow / lbserver
+  for (const endpoint of YT_API_CONFIG.endpoints) {
+    if (!ytIsTaskActive(task)) return;
+    try {
+      const api = new URL(endpoint);
+      api.searchParams.set('copyright', '0');
+      api.searchParams.set('allow_extended_duration', '1');
+      api.searchParams.set('format', String(formatCode));
+      api.searchParams.set('url', videoUrl);
+      api.searchParams.set('api', YT_API_CONFIG.key);
+
+      const resp = await ytFetch(task, api.toString(), 25000);
+      if (!ytIsTaskActive(task)) return;
+      if (!resp.ok) {
+        lastError = new Error(`HTTP ${resp.status}`);
+        continue;
+      }
+
+      const data = await resp.json();
+      if (!ytIsTaskActive(task)) return;
+      if (data.success && data.progress_url) {
+        ytPollProgress(task, data.progress_url);
+        return;
+      }
+      lastError = new Error(data?.error || '下载服务返回异常');
+    } catch (e) {
+      lastError = e;
+    }
+  }
+
+  // savenow 全失败 → 尝试 dubs.io
+  try {
+    await ytTryDubs(task, formatCode);
+    return;
+  } catch (e) {
+    lastError = e;
+  }
+
+  if (ytIsTaskActive(task)) {
+    ytSetStatus(task, { phase: 'error', error: lastError?.message || '所有下载服务均不可用' });
+    ytClearTask(task);
+  }
+}
+
+function ytCreateRequest(task, timeoutMs) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const onAbort = () => controller.abort();
+  if (task.controller.signal.aborted) {
+    controller.abort();
+  } else {
+    task.controller.signal.addEventListener('abort', onAbort, { once: true });
+  }
+  return {
+    signal: controller.signal,
+    cleanup() {
+      clearTimeout(timeoutId);
+      task.controller.signal.removeEventListener('abort', onAbort);
+    }
+  };
+}
+
+async function ytFetch(task, url, timeoutMs) {
+  const req = ytCreateRequest(task, timeoutMs);
+  try {
+    return await fetch(url, { signal: req.signal });
+  } finally {
+    req.cleanup();
+  }
+}
+
+function ytFinalizeTask(task, status) {
+  if (!ytIsTaskActive(task)) return false;
+  ytSetStatus(task, status);
+  ytClearTask(task);
+  return true;
+}
+
+function ytPollProgress(task, progressUrl) {
+  ytSetStatus(task, { phase: 'converting', progress: 0 }, false);
+
+  const timeoutId = ytTrackTimer(task, setTimeout(() => {
+    if (!ytIsTaskActive(task)) return;
+    ytFinalizeTask(task, { phase: 'error', error: '下载超时' });
+  }, 120000));
+  const intervalId = ytTrackTimer(task, setInterval(async () => {
+    try {
+      if (!ytIsTaskActive(task)) return;
+      const resp = await ytFetch(task, progressUrl, 15000);
+      if (!ytIsTaskActive(task) || !resp.ok) return;
+      const data = await resp.json();
+      if (!ytIsTaskActive(task)) return;
+
+      const progress = Math.min((Number(data.progress) || 0) / 10, 100);
+      ytSetStatus(task, { phase: 'converting', progress }, false);
+
+      if (Number(data.progress) >= 1000 && data.download_url) {
+        clearTimeout(timeoutId);
+        clearInterval(intervalId);
+        ytFinalizeTask(task, {
+          phase: 'done',
+          progress: 100,
+          downloadUrl: data.download_url
+        });
+      }
+    } catch (e) {
+      // 轮询失败不中断，等下次重试
+    }
+  }, 3000));
+}
+
+async function ytTryDubs(task, formatCode) {
+  const { videoUrl, formatId } = task;
+  const videoId = ytExtractVideoId(videoUrl);
+  if (!videoId) throw new Error('无法提取视频 ID');
+
+  if (!ytIsTaskActive(task)) throw new Error('下载已取消');
+  ytSetStatus(task, { phase: 'pending', progress: 0 }, false);
+
+  // Step 1: 启动任务
+  const startUrl = new URL(YT_API_CONFIG.dubsStart);
+  startUrl.searchParams.set('id', videoId);
+  startUrl.searchParams.set('format', String(formatCode));
+
+  const startResp = await ytFetch(task, startUrl.toString(), 25000);
+  if (!ytIsTaskActive(task)) throw new Error('下载已取消');
+  if (!startResp.ok) throw new Error(`Dubs 启动失败: ${startResp.status}`);
+  const startData = await startResp.json();
+
+  if (!startData.success || !startData.progressId) {
+    throw new Error(startData.error || 'Dubs 启动失败');
+  }
+
+  // Step 2: 轮询状态
+  ytSetStatus(task, { phase: 'converting', progress: 0 }, false);
+  const statusUrl = new URL(YT_API_CONFIG.dubsStatus);
+  statusUrl.searchParams.set('id', startData.progressId);
+
+  return new Promise((resolve, reject) => {
+    const dubsTimer = ytTrackTimer(task, setInterval(async () => {
+      try {
+        if (!ytIsTaskActive(task)) return;
+        const resp = await ytFetch(task, statusUrl.toString(), 15000);
+        if (!ytIsTaskActive(task) || !resp.ok) return;
+        const st = await resp.json();
+        if (!ytIsTaskActive(task)) return;
+
+        if (st.progress !== undefined) {
+          const rawProgress = Number(st.progress) || 0;
+          ytSetStatus(task, { phase: 'converting', progress: Math.min(rawProgress / 10, 100) }, false);
+        }
+
+        if (st.finished && st.downloadUrl) {
+          clearInterval(dubsTimer);
+          clearTimeout(timeoutId);
+          ytFinalizeTask(task, {
+            phase: 'done',
+            progress: 100,
+            downloadUrl: st.downloadUrl
+          });
+          resolve();
+        }
+      } catch (e) {
+        // 轮询失败继续重试
+      }
+    }, 3000));
+
+    // 超时 120 秒
+    const timeoutId = ytTrackTimer(task, setTimeout(() => {
+      clearInterval(dubsTimer);
+      if (ytIsTaskActive(task)) {
+        ytSetStatus(task, { phase: 'error', error: '下载超时' }, false);
+        ytClearTask(task);
+        reject(new Error('下载超时'));
+      }
+    }, 120000));
+  });
+}
 
 // ======= 标签关闭时清理 =======
 chrome.tabs.onRemoved.addListener((tabId) => {
