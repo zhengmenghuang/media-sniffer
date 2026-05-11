@@ -13,6 +13,9 @@
   }
   window.__MEDIA_SNIFFER_CONTENT_LOADED__ = true;
 
+  let extensionContextValid = true;
+  let observer = null;
+
   const TAG_TYPE_MAP = {
     video: 'video',
     audio: 'audio',
@@ -130,6 +133,7 @@
   }
 
   function tryYouTubeSniff() {
+    if (!extensionContextValid) return Promise.resolve(0);
     if (!window.location.hostname.includes('youtube.com')) return Promise.resolve(0);
     const resources = parseYouTubePlayerResponse();
     if (resources.length > 0) {
@@ -140,13 +144,31 @@
 
   // ============= 上报 =============
 
+  function isExtensionContextError(error) {
+    return String(error?.message || error).includes('Extension context invalidated');
+  }
+
+  function disableContentScript() {
+    extensionContextValid = false;
+    observer?.disconnect();
+    clearTimeout(tryYouTubeSniff._timer);
+  }
+
   function reportResources(resources) {
-    if (resources.length === 0) return Promise.resolve();
-    return chrome.runtime.sendMessage({ action: 'DOM_RESOURCES', resources }).catch(() => {});
+    if (!extensionContextValid || resources.length === 0) return Promise.resolve();
+    try {
+      return chrome.runtime.sendMessage({ action: 'DOM_RESOURCES', resources }).catch((error) => {
+        if (isExtensionContextError(error)) disableContentScript();
+      });
+    } catch (error) {
+      if (isExtensionContextError(error)) disableContentScript();
+      return Promise.resolve();
+    }
   }
 
   // 页面加载完成后扫描 + YouTube 嗅探
   function onPageReady() {
+    if (!extensionContextValid) return;
     reportResources(scanDOM());
     tryYouTubeSniff();
   }
@@ -172,7 +194,8 @@
   }
 
   // MutationObserver 持续监听新增节点
-  const observer = new MutationObserver((mutations) => {
+  observer = new MutationObserver((mutations) => {
+    if (!extensionContextValid) return;
     const newResources = [];
     let hasNewScript = false;
 
