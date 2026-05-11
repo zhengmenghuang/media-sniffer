@@ -405,9 +405,23 @@ function loadResources(rescan = false) {
 chrome.runtime.onMessage.addListener((message) => {
   if (message.action === 'NEW_RESOURCE' && message.tabId === currentTabId) {
     // 避免重复
-    const exists = allResources.some(r => r.url === message.item.url);
+    const exists = allResources.some(r => {
+      if (r.key && message.item.key) return r.key === message.item.key;
+      return r.url === message.item.url;
+    });
     if (!exists) {
       allResources.unshift(message.item); // 新资源放顶部
+      renderList();
+    }
+  }
+
+  if (message.action === 'RESOURCE_UPDATED' && message.tabId === currentTabId) {
+    const index = allResources.findIndex(r => {
+      if (r.key && message.item.key) return r.key === message.item.key;
+      return r.url === message.item.url;
+    });
+    if (index !== -1) {
+      allResources[index] = message.item;
       renderList();
     }
   }

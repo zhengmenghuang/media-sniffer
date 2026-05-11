@@ -193,6 +193,41 @@ function getFilename(url) {
 }
 
 /**
+ * 生成资源去重 key。
+ * 图片常见同一资源携带 cache/signature/size query，完整 URL 去重会导致列表重复。
+ */
+function getResourceKey(url, type) {
+  try {
+    const u = new URL(url);
+    u.hash = '';
+    if (type === 'image') {
+      const parts = u.pathname.split('/').filter(Boolean);
+      const last = parts[parts.length - 1] || '';
+      const stableName = /^[a-z0-9_-]{6,}(\.[a-z0-9]+)?$/i.test(last);
+      const hasImageExt = /\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff|tif|avif|ico)$/i.test(last);
+      const genericName = /^(image|img|photo|avatar|media|download|file|preview|thumbnail|thumb)$/i.test(last);
+      if ((stableName || hasImageExt) && !genericName) {
+        u.search = '';
+      }
+    }
+    return `${type}:${u.origin}${u.pathname}${u.search}`;
+  } catch {
+    return `${type}:${url}`;
+  }
+}
+
+function mergeResource(existing, next) {
+  const merged = { ...existing };
+  if (!merged.mimeType && next.mimeType) merged.mimeType = next.mimeType;
+  if ((next.size || 0) > (merged.size || 0)) {
+    merged.size = next.size;
+    merged.url = next.url;
+    merged.filename = next.filename;
+  }
+  return merged;
+}
+
+/**
  * 保存资源到 store
  */
 function saveResource(tabId, url, type, mimeType, size) {
@@ -200,20 +235,28 @@ function saveResource(tabId, url, type, mimeType, size) {
     resourceStore.set(tabId, new Map());
   }
   const tabResources = resourceStore.get(tabId);
-  if (!tabResources.has(url)) {
-    const item = {
-      url,
-      type,
-      mimeType: mimeType || '',
-      filename: getFilename(url),
-      size: size || 0,
-      timestamp: Date.now()
-    };
-    tabResources.set(url, item);
+  const key = getResourceKey(url, type);
+  const item = {
+    url,
+    type,
+    mimeType: mimeType || '',
+    filename: getFilename(url),
+    size: size || 0,
+    timestamp: Date.now(),
+    key
+  };
 
-    // 通知 popup（如果打开）
-    chrome.runtime.sendMessage({ action: 'NEW_RESOURCE', tabId, item }).catch(() => {});
+  if (tabResources.has(key)) {
+    const merged = mergeResource(tabResources.get(key), item);
+    tabResources.set(key, merged);
+    chrome.runtime.sendMessage({ action: 'RESOURCE_UPDATED', tabId, item: merged }).catch(() => {});
+    return;
   }
+
+  tabResources.set(key, item);
+
+  // 通知 popup（如果打开）
+  chrome.runtime.sendMessage({ action: 'NEW_RESOURCE', tabId, item }).catch(() => {});
 }
 
 // ======= 监听 webRequest =======
@@ -283,7 +326,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     let resourceType = '';
     const tabMap = resourceStore.get(tabId);
     if (tabMap) {
-      const entry = tabMap.get(url);
+      const entry = tabMap.get(url) || Array.from(tabMap.values()).find(item => item.url === url);
       if (entry) {
         mimeType = entry.mimeType || '';
         resourceType = entry.type || '';
