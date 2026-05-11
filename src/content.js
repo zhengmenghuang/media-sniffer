@@ -164,18 +164,145 @@
     tryYouTubeSniff();
   }
 
+  // ============= 注入式下载（绕过防盗链）==============
+
+  function getDownloadRoot() {
+    return document.body || document.documentElement;
+  }
+
+  function waitForDownloadRoot(timeoutMs = 5000) {
+    const root = getDownloadRoot();
+    if (root) return Promise.resolve(root);
+
+    return new Promise((resolve, reject) => {
+      let done = false;
+      let mutationObserver = null;
+      let rafId = 0;
+      const cleanup = () => {
+        done = true;
+        clearTimeout(timer);
+        if (rafId) cancelAnimationFrame(rafId);
+        mutationObserver?.disconnect();
+      };
+      const checkRoot = () => {
+        if (done) return;
+        const nextRoot = getDownloadRoot();
+        if (!nextRoot) return false;
+        cleanup();
+        resolve(nextRoot);
+        return true;
+      };
+      const timer = setTimeout(() => {
+        cleanup();
+        reject(new Error('页面 DOM 尚未就绪，无法注入下载'));
+      }, timeoutMs);
+      mutationObserver = new MutationObserver(checkRoot);
+      if (document.documentElement) {
+        mutationObserver.observe(document.documentElement, { childList: true, subtree: true });
+      }
+      const tick = () => {
+        if (!checkRoot()) rafId = requestAnimationFrame(tick);
+      };
+      rafId = requestAnimationFrame(tick);
+    });
+  }
+
+  function isSameOriginDownloadUrl(url) {
+    try {
+      const u = new URL(url, location.href);
+      return u.protocol === 'blob:' || u.protocol === 'data:' || u.origin === location.origin;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * 在页面上下文中创建 <a download> 标签触发下载
+   * 这样浏览器会自动携带页面的 Referer 和 Cookie
+   */
+  async function injectDownload(url, filename) {
+    const root = await waitForDownloadRoot();
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename || '';
+    a.rel = 'noopener';
+    a.style.display = 'none';
+    root.appendChild(a);
+    a.click();
+
+    return new Promise((resolve) => {
+      setTimeout(() => {
+        a.remove();
+        resolve({
+          ok: true,
+          triggered: true,
+          verified: isSameOriginDownloadUrl(url),
+          warning: isSameOriginDownloadUrl(url) ? '' : '跨域链接无法确认浏览器是否接受 download 属性'
+        });
+      }, 300);
+    });
+  }
+
+  /**
+   * 通过 fetch + blob 方式下载（对无 download 支持的场景兜底）
+   */
+  async function fetchBlobDownload(url, filename) {
+    let blobUrl = '';
+    let a = null;
+    try {
+      const root = await waitForDownloadRoot();
+      const resp = await fetch(url, { mode: 'cors', credentials: 'include' });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const blob = await resp.blob();
+      blobUrl = URL.createObjectURL(blob);
+      a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = filename || 'media';
+      a.style.display = 'none';
+      root.appendChild(a);
+      a.click();
+      setTimeout(() => {
+        a?.remove();
+        URL.revokeObjectURL(blobUrl);
+      }, 1000);
+      return { ok: true, triggered: true, verified: true };
+    } catch (e) {
+      a?.remove();
+      if (blobUrl) URL.revokeObjectURL(blobUrl);
+      return { ok: false, error: e.message };
+    }
+  }
+
+  // ============= 消息监听 =============
   chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
-    if (message.action !== 'RESCAN_DOM') return false;
-    const resources = scanDOM();
-    reportResources(resources)
-      .then(() => tryYouTubeSniff())
-      .then((youtubeCount) => {
-        sendResponse({ ok: true, count: resources.length + youtubeCount });
-      })
-      .catch(() => {
-        sendResponse({ ok: false, count: resources.length });
-      });
-    return true;
+    if (message.action !== 'RESCAN_DOM' && message.action !== 'INJECT_DOWNLOAD' && message.action !== 'FETCH_BLOB_DOWNLOAD') return false;
+
+    if (message.action === 'RESCAN_DOM') {
+      const resources = scanDOM();
+      reportResources(resources)
+        .then(() => tryYouTubeSniff())
+        .then((youtubeCount) => {
+          sendResponse({ ok: true, count: resources.length + youtubeCount });
+        })
+        .catch(() => {
+          sendResponse({ ok: false, count: resources.length });
+        });
+      return true;
+    }
+
+    if (message.action === 'INJECT_DOWNLOAD') {
+      injectDownload(message.url, message.filename)
+        .then(result => sendResponse(result))
+        .catch(err => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
+
+    if (message.action === 'FETCH_BLOB_DOWNLOAD') {
+      fetchBlobDownload(message.url, message.filename)
+        .then(result => sendResponse(result))
+        .catch(err => sendResponse({ ok: false, error: err.message }));
+      return true;
+    }
   });
 
   if (document.readyState === 'loading') {

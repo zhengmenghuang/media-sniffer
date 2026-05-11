@@ -344,6 +344,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  // ======= 注入下载 & Blob 下载（转发到 content script）=======
+  if (message.action === 'INJECT_DOWNLOAD' || message.action === 'FETCH_BLOB_DOWNLOAD') {
+    const { url, filename, tabId } = message;
+    // 转发到 content script 在页面上下文执行下载
+    chrome.tabs.sendMessage(tabId, { action: message.action, url, filename })
+      .then(result => sendResponse(result || { ok: false, error: 'content script 无响应' }))
+      .catch(err => sendResponse({ ok: false, error: err.message }));
+    return true;
+  }
+
   // ======= YouTube 下载（通过第三方 API）=======
   if (message.action === 'YT_DOWNLOAD_START') {
     const { videoUrl, format } = message;

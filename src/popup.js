@@ -246,6 +246,17 @@ function createActions(item) {
     download.dataset.filename = item.filename;
     download.textContent = '⬇ 下载';
     actions.appendChild(download);
+
+    // 视频资源增加"注入下载"按钮（绕过防盗链，适用于抖音等平台）
+    if (item.type === 'video') {
+      const injectDl = document.createElement('button');
+      injectDl.className = 'btn-action btn-inject do-inject-download';
+      injectDl.dataset.url = item.url;
+      injectDl.dataset.filename = item.filename;
+      injectDl.title = '通过页面注入下载，可绕过防盗链限制（抖音等平台适用）';
+      injectDl.textContent = '🎯 注入';
+      actions.appendChild(injectDl);
+    }
   }
 
   const copy = document.createElement('button');
@@ -283,6 +294,39 @@ function handleListClick(e) {
         }
       })
       .catch((err) => showToast(`下载失败：${err?.message || '未知错误'}`, 2500));
+    return;
+  }
+
+  const injectBtn = e.target.closest('.do-inject-download');
+  if (injectBtn) {
+    const url = injectBtn.dataset.url;
+    const filename = injectBtn.dataset.filename;
+    if (!currentTabId) return;
+    injectBtn.disabled = true;
+    // 先尝试注入下载（a download 标签）
+    chrome.runtime.sendMessage({ action: 'INJECT_DOWNLOAD', url, filename, tabId: currentTabId })
+      .then((result) => {
+        if (result?.ok) {
+          if (result.verified) {
+            showToast('✅ 注入下载已触发');
+          } else {
+            showToast('注入请求已发出，请查看浏览器下载栏', 2500);
+          }
+        } else {
+          // 注入下载失败，尝试 fetch+blob 方式
+          showToast('注入失败，尝试 Blob 下载...', 1500);
+          return chrome.runtime.sendMessage({ action: 'FETCH_BLOB_DOWNLOAD', url, filename, tabId: currentTabId });
+        }
+      })
+      .then((result) => {
+        if (result && result?.ok) {
+          showToast('✅ Blob 下载已触发');
+        } else if (result && !result?.ok) {
+          showToast(`下载失败：${result?.error || '资源可能不支持跨域下载'}`, 3000);
+        }
+      })
+      .catch((err) => showToast(`下载失败：${err?.message || '未知错误'}`, 2500))
+      .finally(() => { injectBtn.disabled = false; });
     return;
   }
 
@@ -437,6 +481,13 @@ chrome.runtime.onMessage.addListener((message) => {
       renderList();
     }
   }
+
+  if (message.action === 'YT_DOWNLOAD_STATUS') {
+    updateYtProgress(message);
+    if (message.phase === 'pending' || message.phase === 'converting') {
+      startYtStatusPolling();
+    }
+  }
 });
 
 // ======= YouTube 下载面板 =======
@@ -490,6 +541,7 @@ function resetYtProgress() {
   ytProgressText.className = 'yt-progress-text';
   ytDlBtn.disabled = false;
   ytDlBtn.textContent = '开始下载';
+  setYtFormatButtonsDisabled(false);
 }
 
 function updateYtProgress(status) {
@@ -508,12 +560,16 @@ function updateYtProgress(status) {
     ytProgressText.className = 'yt-progress-text';
     ytDlBtn.disabled = true;
     ytDlBtn.textContent = '处理中...';
+    syncYtSelectedFormat(status.format);
+    setYtFormatButtonsDisabled(true);
   } else if (status.phase === 'converting') {
     ytProgressFill.style.width = `${status.progress}%`;
     ytProgressText.textContent = `正在处理 ${status.progress}%`;
     ytProgressText.className = 'yt-progress-text';
     ytDlBtn.disabled = true;
     ytDlBtn.textContent = '处理中...';
+    syncYtSelectedFormat(status.format);
+    setYtFormatButtonsDisabled(true);
   } else if (status.phase === 'done') {
     ytProgressFill.style.width = '100%';
     ytProgressText.textContent = '下载就绪！';
@@ -521,20 +577,51 @@ function updateYtProgress(status) {
     ytDlBtn.disabled = false;
     ytDlBtn.textContent = '⬇ 保存到本地';
     ytDlBtn.dataset.downloadUrl = status.downloadUrl;
+    syncYtSelectedFormat(status.format);
+    setYtFormatButtonsDisabled(false);
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
   } else if (status.phase === 'error') {
     ytProgressText.textContent = `失败：${status.error || '未知错误'}`;
     ytProgressText.className = 'yt-progress-text error';
     ytDlBtn.disabled = false;
     ytDlBtn.textContent = '🔄 重试';
+    setYtFormatButtonsDisabled(false);
     if (ytPollTimer) { clearInterval(ytPollTimer); ytPollTimer = null; }
   }
+}
+
+function setYtFormatButtonsDisabled(disabled) {
+  ytFormats.querySelectorAll('.yt-fmt-btn').forEach(btn => {
+    btn.disabled = disabled;
+  });
+}
+
+function syncYtSelectedFormat(format) {
+  if (!format) return;
+  const btn = Array.from(ytFormats.querySelectorAll('.yt-fmt-btn')).find(item => item.dataset.fmt === format);
+  if (!btn) return;
+  ytFormats.querySelectorAll('.yt-fmt-btn').forEach(b => b.classList.remove('active'));
+  btn.classList.add('active');
+  ytSelectedFormat = format;
+}
+
+function startYtStatusPolling() {
+  if (ytPollTimer) return;
+  ytPollTimer = setInterval(() => {
+    chrome.runtime.sendMessage({ action: 'YT_DOWNLOAD_STATUS' }).then(s => {
+      updateYtProgress(s);
+      if (s.phase === 'done' || s.phase === 'error' || s.phase === 'idle') {
+        clearInterval(ytPollTimer);
+        ytPollTimer = null;
+      }
+    }).catch(() => {});
+  }, 2000);
 }
 
 // 格式选择按钮
 ytFormats.addEventListener('click', (e) => {
   const btn = e.target.closest('.yt-fmt-btn');
-  if (!btn) return;
+  if (!btn || btn.disabled) return;
   ytFormats.querySelectorAll('.yt-fmt-btn').forEach(b => b.classList.remove('active'));
   btn.classList.add('active');
   ytSelectedFormat = btn.dataset.fmt;
@@ -546,8 +633,18 @@ ytFormats.addEventListener('click', (e) => {
 ytDlBtn.addEventListener('click', () => {
   // 如果已经有 downloadUrl，直接下载
   if (ytDlBtn.dataset.downloadUrl) {
-    chrome.downloads.download({ url: ytDlBtn.dataset.downloadUrl, saveAs: true });
-    resetYtProgress();
+    const downloadUrl = ytDlBtn.dataset.downloadUrl;
+    chrome.downloads.download({ url: downloadUrl, saveAs: true }, (downloadId) => {
+      if (chrome.runtime.lastError) {
+        updateYtProgress({ phase: 'error', error: chrome.runtime.lastError.message });
+        return;
+      }
+      if (!downloadId) {
+        updateYtProgress({ phase: 'error', error: '下载未能启动' });
+        return;
+      }
+      resetYtProgress();
+    });
     return;
   }
   // 否则启动新下载
@@ -559,17 +656,9 @@ ytDlBtn.addEventListener('click', () => {
     format: ytSelectedFormat
   }).then(status => {
     updateYtProgress(status);
-    // 开始轮询状态
-    if (ytPollTimer) clearInterval(ytPollTimer);
-    ytPollTimer = setInterval(() => {
-      chrome.runtime.sendMessage({ action: 'YT_DOWNLOAD_STATUS' }).then(s => {
-        updateYtProgress(s);
-        if (s.phase === 'done' || s.phase === 'error' || s.phase === 'idle') {
-          clearInterval(ytPollTimer);
-          ytPollTimer = null;
-        }
-      }).catch(() => {});
-    }, 2000);
+    if (status.phase === 'pending' || status.phase === 'converting') {
+      startYtStatusPolling();
+    }
   }).catch(err => {
     updateYtProgress({ phase: 'error', error: err?.message });
   });
