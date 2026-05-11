@@ -203,10 +203,11 @@ function getResourceKey(url, type) {
     if (type === 'image') {
       const parts = u.pathname.split('/').filter(Boolean);
       const last = parts[parts.length - 1] || '';
-      const stableName = /^[a-z0-9_-]{6,}(\.[a-z0-9]+)?$/i.test(last);
+      const stableName = /^[a-z0-9_-]+(\.[a-z0-9]+)?$/i.test(last);
       const hasImageExt = /\.(jpg|jpeg|png|gif|webp|svg|bmp|tiff|tif|avif|ico)$/i.test(last);
       const genericName = /^(image|img|photo|avatar|media|download|file|preview|thumbnail|thumb)$/i.test(last);
-      if ((stableName || hasImageExt) && !genericName) {
+      const stablePath = parts.length > 1 && stableName && !genericName;
+      if (stablePath || hasImageExt) {
         u.search = '';
       }
     }
