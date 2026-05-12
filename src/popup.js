@@ -21,6 +21,10 @@ let allResources = [];
 let currentType = 'all';
 let searchQuery = '';
 let currentTabId = null;
+let currentTabUrl = '';
+const launchParams = new URLSearchParams(window.location.search);
+const isStandaloneWindow = launchParams.get('window') === '1';
+const launchTabId = Number(launchParams.get('tabId') || 0);
 
 // ======= 图片大图预览（position:fixed 避免被滚动裁剪）=======
 let previewEl = null;
@@ -95,6 +99,12 @@ const totalBadge = document.getElementById('total-badge');
 const statusText = document.getElementById('status-text');
 const searchInput = document.getElementById('search-input');
 const toast = document.getElementById('toast');
+const popoutBtn = document.getElementById('btn-popout');
+
+if (isStandaloneWindow) {
+  document.body.classList.add('standalone');
+  popoutBtn.hidden = true;
+}
 
 // ======= Toast 提示 =======
 let toastTimer;
@@ -401,6 +411,11 @@ document.getElementById('btn-refresh').addEventListener('click', () => {
   loadResources(true);
 });
 
+// ======= 独立窗口按钮 =======
+popoutBtn.addEventListener('click', () => {
+  openStandaloneWindow();
+});
+
 // ======= 清除按钮 =======
 document.getElementById('btn-clear').addEventListener('click', () => {
   if (!currentTabId) return;
@@ -412,6 +427,36 @@ document.getElementById('btn-clear').addEventListener('click', () => {
 });
 
 // ======= 加载资源 =======
+function getTargetTab() {
+  if (isStandaloneWindow && launchTabId) {
+    return chrome.tabs.get(launchTabId);
+  }
+  return chrome.tabs.query({ active: true, currentWindow: true }).then(tabs => tabs?.[0] || null);
+}
+
+function openStandaloneWindow() {
+  getTargetTab()
+    .then((tab) => {
+      if (!tab?.id) {
+        showToast('无法获取当前标签页', 2000);
+        return;
+      }
+      const params = new URLSearchParams({
+        window: '1',
+        tabId: String(tab.id),
+      });
+      const url = chrome.runtime.getURL(`src/popup.html?${params.toString()}`);
+      return chrome.windows.create({
+        url,
+        type: 'popup',
+        width: 660,
+        height: 760,
+        focused: true,
+      });
+    })
+    .catch((err) => showToast(`打开独立窗口失败：${err?.message || '未知错误'}`, 2500));
+}
+
 function loadResources(rescan = false) {
   listContainer.className = 'loading';
   const spinner = document.createElement('div');
@@ -420,14 +465,19 @@ function loadResources(rescan = false) {
   loadingText.textContent = '正在嗅探...';
   listContainer.replaceChildren(spinner, loadingText);
 
-  chrome.tabs.query({ active: true, currentWindow: true }, (tabs) => {
-    if (!tabs || !tabs[0]) return;
-    currentTabId = tabs[0].id;
-    const tabUrl = tabs[0].url || '';
+  getTargetTab().then((tab) => {
+    if (!tab?.id) {
+      allResources = [];
+      renderList();
+      showToast('无法获取目标标签页', 2000);
+      return;
+    }
+    currentTabId = tab.id;
+    currentTabUrl = tab.url || '';
 
     // YouTube 检测：显示下载面板
-    if (isYouTubeUrl(tabUrl) && getYouTubeVideoId(tabUrl)) {
-      showYtPanel(tabUrl);
+    if (isYouTubeUrl(currentTabUrl) && getYouTubeVideoId(currentTabUrl)) {
+      showYtPanel(currentTabUrl);
       chrome.runtime.sendMessage({ action: 'YT_DOWNLOAD_STATUS' })
         .then(updateYtProgress)
         .catch(() => resetYtProgress());
@@ -454,6 +504,10 @@ function loadResources(rescan = false) {
     }
 
     fetchResources();
+  }).catch((err) => {
+    allResources = [];
+    renderList();
+    showToast(`加载失败：${err?.message || '未知错误'}`, 2500);
   });
 }
 

@@ -36,6 +36,12 @@
       flex-direction: column;
       overflow: hidden;
     }
+    body.standalone {
+      width: 100vw;
+      height: 100vh;
+      min-height: 0;
+      max-height: none;
+    }
 
     /* ---- Header ---- */
     .header {
@@ -470,6 +476,7 @@
     <span class="badge" id="total-badge">0</span>
   </div>
   <div style="display:flex;gap:6px;">
+    <button class="btn-icon" id="btn-popout" title="独立窗口打开">🗔 独立</button>
     <button class="btn-icon" id="btn-refresh" title="重新扫描">🔄 刷新</button>
     <button class="btn-icon" id="btn-clear" title="清除列表">🗑 清除</button>
   </div>
